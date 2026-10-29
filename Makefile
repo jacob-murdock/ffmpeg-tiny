@@ -1,7 +1,7 @@
-# Minimal FFmpeg size matrix for Daggermap / kineticon.
+# Minimal decode-only FFmpeg static library presets.
 #
+#   make / make build PRESET=h264  # one preset (default h264)
 #   make sizes              # build all presets, write SIZE_REPORT.md
-#   make build PRESET=h264  # one preset
 #   make clean              # wipe out/
 #   make clean-all          # wipe out/ and src/ build trees
 
@@ -18,7 +18,7 @@ JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 
 .PHONY: all sizes build clean clean-all check-src report help
 
-all: sizes
+all: build
 
 help:
 	@echo "Presets: $(PRESETS)"
@@ -33,6 +33,10 @@ check-src:
 
 build: check-src
 	$(SCRIPTS)/build_preset.sh $(PRESET)
+
+sizes: check-src
+	@for p in $(PRESETS); do $(SCRIPTS)/build_preset.sh $$p || exit 1; done
+	$(MAKE) report
 
 report:
 	$(SCRIPTS)/size_report.sh > $(ROOT)/SIZE_REPORT.md

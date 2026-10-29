@@ -1,65 +1,82 @@
 # ffmpeg-tiny
 
-Minimal, self-compiled FFmpeg builds tailored to my needs.
+Build recipes for small, decode-only FFmpeg static libraries.
 
-Produces small static `libav*` archives (and optional shared objects) with only the demuxers/decoders desired.
+This repo holds configure presets, build scripts and a GitHub Actions matrix. It does not contain FFmpeg itself; the build clones upstream FFmpeg **n7.1** into `src/` and configures it with `--disable-everything`, then turns back on only the decoders, demuxers and parsers a preset asks for.
 
-## Why
+## What's in a build
 
-Per-platform Media Foundation / AVFoundation / MediaCodec / libvpx stacks are a lot of code for the same job. A trimmed FFmpeg decode path is one backend, one build recipe, and ~1–3 MiB of binary depending on codec set.
+Every preset uses the same base:
 
-## Layout
+- Enabled: `libavutil`, `libavcodec`, `libavformat`, `libswscale` (YUV → RGBA), the `file` protocol
+- Disabled: programs (`ffmpeg`, `ffprobe`), docs, network, `avdevice`, `avfilter`, `swresample`, `postproc`, autodetected external libraries, debug info
+- `--enable-small`, static libraries only (`--enable-static --disable-shared`)
+- Image-capable presets also enable zlib (PNG, APNG, lossless WebP)
 
-```
-src/           FFmpeg source (shallow clone; not committed)
-configs/       Named configure presets
-scripts/       Build + size report helpers
-out/<preset>/  Install prefix per preset (libs, headers)
-SIZE_REPORT.md Generated after `make sizes`
-```
+### Presets
 
-## Quick start
+| Preset | Decoders | Demuxers |
+|--------|----------|----------|
+| `h264` | h264 | mov |
+| `h264_vp8` | h264, vp8 | mov, matroska |
+| `h264_vp8_vp9` | h264, mpeg4, vp8, vp9 | mov, matroska |
+| `h264_vp8_vp9_extra` | + av1, gif, webp, apng, png | + avi, flv, gif, apng, image2 |
+| `h264_vp8_vp9_extra_images` | + mjpeg, bmp, targa, psd, hdr, pnm/pam | + image2pipe, `image_*_pipe` |
+| `h264_vp8_vp9_extra_images_hw` | same as above, plus GPU hwaccel | same |
+
+The `_hw` preset adds hardware decode per platform:
+
+| Platform | Hardware API |
+|----------|--------------|
+| linux, windows (default) | Vulkan |
+| windows with `HW_API=d3d11` | D3D11VA |
+| macos, macos-x86_64, ios, ios-simulator | VideoToolbox |
+| android | MediaCodec (JNI) |
+
+Software decoders stay compiled in as FFmpeg's hwaccel shells. Apps using it are expected to fail closed if hardware decode can't be set up, rather than fall back to software video decode.
+
+## Building
+
+Requirements: bash, make, a C toolchain, `nasm` for x86_64 targets, and `pkg-config`.
 
 ```bash
-# First time: ensure src/ exists (n7.1 tag)
 git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git src
 
-# Build all size-comparison presets (Linux host)
-make sizes
-
-# Or one preset
-make build PRESET=h264
-make build PRESET=h264_vp8_vp9
+make                                   # same as: make build PRESET=h264
 make build PRESET=h264_vp8_vp9_extra_images_hw
+make sizes                             # build every preset, write SIZE_REPORT.md
 ```
 
-GitHub Actions (`.github/workflows/build-ffmpeg.yaml`) builds `h264_vp8_vp9_extra_images_hw` by default for eight artifacts: `linux`, `windows-vulkan`, `windows-d3d11`, `macos` (arm64), `macos-x86_64` (Intel, cross-compiled on `macos-14`), `ios`, `ios-simulator`, and `android`. Dispatch input `preset` overrides the config name. Windows DX11 SKU sets `HW_API=d3d11` in CI. `ios` is iphoneos arm64; `ios-simulator` is iphonesimulator arm64 (needed for Daggermap `make *-ios-sim`).
+Output goes to `out/<preset>/lib/*.a` and `out/<preset>/include/`.
 
-Vendor into ApoC / C as `external/ffmpeg/lib/macos/` (arm64) and `external/ffmpeg/lib/macos-x86_64/` (Intel). Headers stay shared under `external/ffmpeg/include/`.
+Cross builds are selected with `TARGET_PLATFORM`:
 
-`macos-x86_64` needs **nasm** (x86 SIMD asm). CI installs it via Homebrew; locally: `brew install nasm`.
+```bash
+TARGET_PLATFORM=windows make build PRESET=h264_vp8_vp9_extra_images_hw              # MinGW, Vulkan
+TARGET_PLATFORM=windows HW_API=d3d11 make build PRESET=h264_vp8_vp9_extra_images_hw # MinGW, D3D11VA
+TARGET_PLATFORM=android make build PRESET=h264_vp8_vp9_extra_images_hw              # needs ANDROID_NDK_HOME
+```
 
-Vulkan jobs do **not** need a GPU on the runner. FFmpeg n7.1 requires Vulkan headers ≥ 1.3.277; Ubuntu’s `libvulkan-dev` is often too old, so CI runs `scripts/ensure_vulkan_headers.sh` to vendor Khronos headers into `tools/` (gitignored) and points `PKG_CONFIG_PATH` at them. Re-run that script locally if your distro headers are below 1.3.277.
+Supported values: `linux`, `windows`, `macos` (arm64), `macos-x86_64` (Intel, cross-compiled on Apple Silicon), `ios`, `ios-simulator` (arm64), `android` (arm64), `android-x86_64` (emulator; asm disabled for PIC).
 
-## Presets
+Notes:
 
-| Preset | Decoders | Demuxers | Intent |
-|--------|----------|----------|--------|
-| `h264` | h264 | mov | Minimal MP4/H.264 |
-| `h264_vp8` | h264, vp8 | mov, matroska | MP4 + WebM/VP8 |
-| `h264_vp8_vp9` | h264, vp8, vp9 | mov, matroska | Recommended creator video set |
-| `h264_vp8_vp9_extra` | + av1, gif, webp, apng/png | + avi, flv, gif, apng, image2 | Anim loops + AV1 + extra containers |
-| `h264_vp8_vp9_extra_images` | + mjpeg, bmp, targa, psd, hdr, pnm | + image2pipe, image_*_pipe | Video + stb_image-parity stills |
-| `h264_vp8_vp9_extra_images_hw` | same soft shells + GPU hwaccel | same | Daggermap GPU SKUs: Vulkan (linux/windows), D3D11VA (`HW_API=d3d11` windows alt), VideoToolbox (macos / macos-x86_64 / ios / ios-simulator), MediaCodec (android). Soft video stays as FFmpeg hwaccel shells; app should fail closed — no soft video fallback. |
+- FFmpeg n7.1 needs Vulkan headers 1.3.277 or newer. Ubuntu's `libvulkan-dev` is often older, so `scripts/ensure_vulkan_headers.sh` vendors Khronos headers into `tools/` (gitignored). No GPU is needed to build.
+- Object trees are kept per preset, platform and `HW_API` under `src/build-*`, so several targets can share one checkout.
+- `make clean` removes `out/`; `make clean-all` also removes the build trees.
 
-All presets: `--disable-everything`, `--enable-small`, file protocol only, no programs/docs/network/filters/devices, `swscale` enabled (YUV→RGBA). Image-capable presets also `--enable-zlib` (PNG/APNG/lossless WebP).
+## CI
 
-## License note
+`.github/workflows/build-ffmpeg.yaml` runs on manual dispatch and builds `h264_vp8_vp9_extra_images_hw` by default (override with the `preset` input). It produces nine artifacts, each with `lib/` and `include/`:
 
-These builds use FFmpeg's LGPL components only (no `--enable-gpl`, no x264/x265). Static linking into a closed binary has LGPL redistribution obligations (provide relinkable objects or prefer shared libs). Prefer shipping a small shared `libkineticon_av.so` / `.dylib` / `.dll` for compliance when we wire this into ApoC.
+`ffmpeg-tiny-linux`, `-windows-vulkan`, `-windows-d3d11`, `-macos`, `-macos-x86_64`, `-ios`, `-ios-simulator`, `-android`, `-android-x86_64`
 
-AV1 is included via FFmpeg's native decoder (LGPL). AOMedia publishes a royalty-free patent license for AV1; that is a stronger posture than HEVC, though third-party patent claims exist in the industry—treat as the usual codec diligence, not legal advice.
+## Licensing
 
-## Pin
+FFmpeg is licensed under the LGPL 2.1 or later, with some optional parts under the GPL. These builds don't pass `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, and `--disable-autodetect` keeps external libraries out, so the resulting libraries are **LGPL 2.1+**. The configure line is in `scripts/build_preset.sh`.
 
-Default source pin: FFmpeg **n7.1**.
+If you ship these static libraries inside a closed-source program, the LGPL requires you to let users relink against a modified FFmpeg (for example by providing your object files, or by linking FFmpeg dynamically instead) and to offer the FFmpeg source you used. Upstream's checklist: https://ffmpeg.org/legal.html
+
+Codec patents (H.264 in particular) are a separate question from the copyright license. This isn't legal advice.
+
+The build scripts, configs and CI workflows in this repo are MIT licensed (see `LICENSE`). That license doesn't cover the FFmpeg source fetched into `src/` or the libraries built from it, which stay under FFmpeg's own license.

@@ -46,6 +46,9 @@ jobs:
           - artifact: android
             target: android
             os: ubuntu-latest
+          - artifact: android-x86_64
+            target: android-x86_64
+            os: ubuntu-latest
 
     steps:
       - name: Checkout ffmpeg-tiny
@@ -55,7 +58,7 @@ jobs:
         run: git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg.git src
 
       - name: Install Linux-hosted build dependencies
-        if: matrix.target == 'linux' || matrix.target == 'windows' || matrix.target == 'android'
+        if: matrix.target == 'linux' || matrix.target == 'windows' || startsWith(matrix.target, 'android')
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -92,13 +95,13 @@ jobs:
         shell: bash
 
       - name: Setup Android NDK
-        if: matrix.target == 'android'
+        if: startsWith(matrix.target, 'android')
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
 
       - name: Setup Java (Android JNI / MediaCodec)
-        if: matrix.target == 'android'
+        if: startsWith(matrix.target, 'android')
         uses: actions/setup-java@v4
         with:
           distribution: temurin

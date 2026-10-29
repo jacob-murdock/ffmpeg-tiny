@@ -121,7 +121,7 @@ case "$PLATFORM" in
     )
     ;;
 
-  android)
+  android|android-x86_64)
     # 1. Cascaded search to find a valid NDK directory
     NDK_ROOT=""
     for candidate in \
@@ -140,12 +140,24 @@ case "$PLATFORM" in
       exit 1
     fi
 
-    TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+    case "$(uname -s)" in
+      Linux)  HOST_TAG=linux-x86_64 ;;
+      Darwin) HOST_TAG=darwin-x86_64 ;;
+      *)      echo "Error: unsupported host for Android NDK prebuilt lookup" >&2; exit 1 ;;
+    esac
+    TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/${HOST_TAG}"
+
+    ANDROID_ARCH=aarch64
+    ANDROID_TRIPLE=aarch64-linux-android33
+    if [[ "$PLATFORM" == android-x86_64 ]]; then
+      ANDROID_ARCH=x86_64
+      ANDROID_TRIPLE=x86_64-linux-android33
+    fi
 
     # We use the explicit compiler script, which already self-packages target, sysroot, and headers.
     # FFmpeg requires '--cc' and '--cxx' for cross-compilation configurations.
-    CC_COMPILER="$TOOLCHAIN/bin/aarch64-linux-android33-clang"
-    CXX_COMPILER="$TOOLCHAIN/bin/aarch64-linux-android33-clang++"
+    CC_COMPILER="$TOOLCHAIN/bin/${ANDROID_TRIPLE}-clang"
+    CXX_COMPILER="$TOOLCHAIN/bin/${ANDROID_TRIPLE}-clang++"
 
     # Ensure the target compiler actually exists at the resolved path
     if [[ ! -x "$CC_COMPILER" ]]; then
@@ -155,11 +167,17 @@ case "$PLATFORM" in
 
     EXTRA_CONF_ARGS+=(
       "--target-os=android"
-      "--arch=aarch64"
+      "--arch=$ANDROID_ARCH"
       "--enable-cross-compile"
+      "--enable-pic"
       "--cc=$CC_COMPILER"
       "--cxx=$CXX_COMPILER"
+      "--extra-cflags=-fPIC"
     )
+    if [[ "$PLATFORM" == android-x86_64 ]]; then
+      # x86 SIMD asm is not PIC-safe when linked into a shared library (lld R_X86_64_PC32).
+      EXTRA_CONF_ARGS+=("--disable-asm")
+    fi
     ;;
 esac
 
@@ -206,7 +224,7 @@ if [[ "${PRESET_ENABLE_HW:-0}" == "1" ]]; then
         "--enable-hwaccel=h264_videotoolbox,vp9_videotoolbox,mpeg4_videotoolbox"
       )
       ;;
-    android)
+    android|android-x86_64)
       EXTRA_CONF_ARGS+=(
         "--enable-jni"
         "--enable-mediacodec"
